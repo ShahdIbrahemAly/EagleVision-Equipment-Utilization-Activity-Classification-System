@@ -236,6 +236,9 @@ def main():
     if 'redis_subscriber' not in st.session_state:
         st.session_state.redis_subscriber = RedisFrameSubscriber()
     
+    # Initialize database and Redis connections
+    initialize_connections()
+    
     # Auto-refresh every second
     st_autorefresh(interval=1000, key="refresh")
     
@@ -325,14 +328,4 @@ def initialize_connections():
 
 # Initialize connections on first run
 if __name__ == "__main__":
-    # Set up connections before rendering
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
-    
-    if 'redis_subscriber' not in st.session_state:
-        st.session_state.redis_subscriber = RedisFrameSubscriber()
-    
-    initialize_connections()
-    
-    # Run main app
     main()

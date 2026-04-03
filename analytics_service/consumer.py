@@ -10,6 +10,7 @@ import signal
 import sys
 from typing import Dict, Any, Optional
 from confluent_kafka import Consumer, KafkaException, KafkaError
+from confluent_kafka.error import ConsumeError as DeserializationError
 from dotenv import load_dotenv
 
 # Load environment variables

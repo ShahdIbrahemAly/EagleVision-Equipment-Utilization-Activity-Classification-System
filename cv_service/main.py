@@ -149,8 +149,22 @@ class CVService:
         try:
             # Check if video file exists
             if not os.path.exists(self.video_source):
-                self.logger.error(f"Video file not found: {self.video_source}")
-                return False
+                self.logger.warning(f"Video file not found: {self.video_source}")
+                self.logger.info("Attempting to generate test video automatically...")
+                
+                # Create data directory if it doesn't exist
+                video_dir = os.path.dirname(self.video_source) or "data"
+                os.makedirs(video_dir, exist_ok=True)
+                
+                # Auto-generate test video
+                try:
+                    from generate_test_video import generate_test_video
+                    self.logger.info(f"Generating test video to {self.video_source}...")
+                    generate_test_video(self.video_source, duration=60)
+                    self.logger.info(f"Test video generated successfully: {self.video_source}")
+                except Exception as gen_error:
+                    self.logger.error(f"Failed to generate test video: {gen_error}")
+                    return False
             
             # Initialize video capture
             self.cap = cv2.VideoCapture(self.video_source)

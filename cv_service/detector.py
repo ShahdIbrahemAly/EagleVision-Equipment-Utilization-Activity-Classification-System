@@ -12,7 +12,9 @@ from ultralytics import YOLO
 
 # Equipment class mapping for COCO dataset
 EQUIPMENT_CLASSES = {
-    7: "truck"  # Use truck class as proxy for dump_truck/excavator
+    2: "car",      # Car as proxy for light equipment
+    5: "bus",      # Bus as proxy for transport equipment
+    7: "truck"     # Truck as proxy for dump_truck/excavator
 }
 
 # Activity and state constants
@@ -47,9 +49,11 @@ class EquipmentDetector:
         self.logger.info(f"Loading YOLO model: {model_path}")
         self.model = YOLO(model_path)
         
-        # Map truck class to excavator as fallback (no dedicated excavator in COCO)
+        # Map detected classes to equipment types
         self.class_mapping = {
-            "truck": "excavator"  # Use truck as proxy for excavator
+            "car": "light_equipment",    # Light mobile equipment
+            "bus": "transport_equipment", # Transport/support equipment
+            "truck": "excavator"         # Use truck as proxy for excavator
         }
         
     def detect(self, frame: np.ndarray) -> List[Detection]:
@@ -96,9 +100,13 @@ class EquipmentDetector:
                         # Map to equipment type
                         equipment_type = self.class_mapping.get(class_name, class_name)
                         
-                        # Generate equipment ID
+                        # Generate equipment ID based on type
                         if equipment_type == "excavator":
                             equipment_id = f"EX-{track_id:03d}"
+                        elif equipment_type == "transport_equipment":
+                            equipment_id = f"TR-{track_id:03d}"
+                        elif equipment_type == "light_equipment":
+                            equipment_id = f"LE-{track_id:03d}"
                         else:
                             equipment_id = f"DT-{track_id:03d}"
                         
