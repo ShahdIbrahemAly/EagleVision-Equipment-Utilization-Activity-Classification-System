@@ -152,7 +152,6 @@ class RedisFrameSubscriber:
             return None
         
         try:
-            # Look for where you get data from Redis and use this:
             frame_data = self.redis_client.get('latest_frame')
             
             if frame_data is not None:
@@ -162,6 +161,25 @@ class RedisFrameSubscriber:
         
         except Exception as e:
             logger.error(f"Error getting frame from Redis: {e}")
+            return None
+
+    def get_latest_frame_timestamp(self) -> Optional[str]:
+        """
+        Get the timestamp for the latest frame.
+        
+        Returns:
+            UNIX timestamp string or None if not available
+        """
+        if not self.redis_client:
+            return None
+        
+        try:
+            ts_data = self.redis_client.get('latest_frame_ts')
+            if ts_data is not None:
+                return ts_data.decode('utf-8') if isinstance(ts_data, bytes) else str(ts_data)
+            return None
+        except Exception as e:
+            logger.error(f"Error getting frame timestamp from Redis: {e}")
             return None
     
     def close(self) -> None:
@@ -250,19 +268,33 @@ def main():
         
         # Try to get latest frame
         frame_bytes = st.session_state.redis_subscriber.get_latest_frame()
+        frame_ts = st.session_state.redis_subscriber.get_latest_frame_timestamp()
         
         if frame_bytes:
             try:
-                # Convert bytes to image for display
                 image_placeholder = st.empty()
-                image_placeholder.image(frame_bytes, channels="BGR", use_column_width=True)
+
+                # Decode image from bytes
+                nparr = np.frombuffer(frame_bytes, np.uint8)
+                decoded_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                if decoded_frame is None:
+                    raise ValueError("Failed to decode frame data")
+
+                decoded_frame = cv2.cvtColor(decoded_frame, cv2.COLOR_BGR2RGB)
+                image_placeholder.image(decoded_frame, channels="RGB", use_column_width=True)
+
+                # Update last updated value in session state
+                st.session_state['last_updated_ts'] = frame_ts or time.strftime('%H:%M:%S')
+
             except Exception as e:
                 st.error(f"Error displaying frame: {e}")
+                st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=Corrupt+Frame", use_column_width=True)
         else:
             # Show placeholder if no frame available
             st.info("Waiting for video feed...")
-            st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=No+Video+Feed", 
-                    use_column_width=True)
+            st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=No+Video+Feed", use_column_width=True)
+            st.session_state['last_updated_ts'] = None
     
     with col_stats:
         st.markdown("### 📊 Equipment Status")
@@ -314,7 +346,19 @@ def main():
         
         st.markdown("---")
         st.markdown("**Last Updated:**")
-        st.markdown(f"{time.strftime('%H:%M:%S')}")
+
+        last_updated_ts = st.session_state.get('last_updated_ts')
+        if last_updated_ts:
+            # Use backend timestamp if available (unix seconds) or human readable
+            try:
+                # if set by backend as float string
+                epoch = float(last_updated_ts)
+                human = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(epoch))
+                st.markdown(f"{human}")
+            except Exception:
+                st.markdown(f"{last_updated_ts}")
+        else:
+            st.markdown("No frame yet")
 
 def initialize_connections():
     """Initialize database and Redis connections."""
