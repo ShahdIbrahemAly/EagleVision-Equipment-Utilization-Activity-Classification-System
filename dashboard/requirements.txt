@@ -1,0 +1,7 @@
+streamlit==1.32.2
+streamlit-autorefresh==1.0.1
+psycopg2-binary==2.9.9
+redis==5.0.1
+numpy==1.26.4
+python-dotenv==1.0.1
+Pillow==10.2.0
