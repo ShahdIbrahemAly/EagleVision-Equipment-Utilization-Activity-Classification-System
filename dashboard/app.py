@@ -148,17 +148,17 @@ class RedisFrameSubscriber:
         Returns:
             Frame bytes or None if no frame available
         """
-        if not self.pubsub:
+        if not self.redis_client:
             return None
         
         try:
-            # Get message (non-blocking)
-            message = self.pubsub.get_message(timeout=0.1)
+            # Look for where you get data from Redis and use this:
+            frame_data = self.redis_client.get('latest_frame')
             
-            if message and message['type'] == 'message':
-                return message['data']
-            
-            return None
+            if frame_data is not None:
+                return frame_data
+            else:
+                return None
         
         except Exception as e:
             logger.error(f"Error getting frame from Redis: {e}")

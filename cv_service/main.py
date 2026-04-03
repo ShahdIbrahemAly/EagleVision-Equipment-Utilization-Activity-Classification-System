@@ -2,14 +2,12 @@
 Main computer vision service for EagleVision.
 Processes video frames to detect and track construction equipment.
 """
-# Monkey patch torch.load FIRST before any imports that might use it
 import torch
-_original_torch_load = torch.load
-def _patched_torch_load(*args, **kwargs):
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
-    return _original_torch_load(*args, **kwargs)
-torch.load = _patched_torch_load
+from functools import partial
+torch.load = partial(torch.load, weights_only=False)
+
+import cv2
+from ultralytics import YOLO
 
 import os
 import sys

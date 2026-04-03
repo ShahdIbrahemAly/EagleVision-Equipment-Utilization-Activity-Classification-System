@@ -67,7 +67,7 @@ class FramePublisher:
     
     def publish(self, frame_bgr) -> bool:
         """
-        Publish a frame to Redis channel.
+        Publish frame to Redis pubsub and set latest_frame key.
         
         Args:
             frame_bgr: BGR image frame as numpy array
@@ -91,14 +91,18 @@ class FramePublisher:
                 self.logger.error("Failed to encode frame as JPEG")
                 return False
             
-            # Publish to Redis channel
             frame_bytes = buffer.tobytes()
+            
+            # 1. Keep your original pubsub for the stream
             result = self.r.publish(self.channel, frame_bytes)
             
             if result > 0:
                 self.logger.debug(f"Frame published to {result} subscribers")
             else:
                 self.logger.debug("No subscribers for frame channel")
+            
+            # 2. ADD THIS LINE (The Fix): Save the latest frame to a fixed key
+            self.r.set('latest_frame', frame_bytes)
             
             return True
             
