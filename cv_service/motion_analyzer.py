@@ -56,25 +56,32 @@ class MotionAnalyzer:
                 self.prev_frame = gray_frame
                 return INACTIVE, NONE, 0.0, 0.0
             
-            # Crop regions from current and previous frames
-            curr_crop = gray_frame[y1:y2, x1:x2]
-            prev_crop = prev_frame[y1:y2, x1:x2]
-            
+            # Clip bbox to image bounds
+            h_frame, w_frame = gray_frame.shape
+            x1_clipped = max(0, min(x1, w_frame - 1))
+            y1_clipped = max(0, min(y1, h_frame - 1))
+            x2_clipped = max(x1_clipped + 1, min(x2, w_frame))
+            y2_clipped = max(y1_clipped + 1, min(y2, h_frame))
+
+            curr_crop = gray_frame[y1_clipped:y2_clipped, x1_clipped:x2_clipped]
+            prev_crop = prev_frame[y1_clipped:y2_clipped, x1_clipped:x2_clipped]
+
             # Skip if crops are too small
             if curr_crop.size == 0 or prev_crop.size == 0:
+                self.prev_frame = gray_frame
                 return INACTIVE, NONE, 0.0, 0.0
-            
-            # Ensure same size
+
+            # Resize previous crop if bbox size changes slightly
             if curr_crop.shape != prev_crop.shape:
-                return INACTIVE, NONE, 0.0, 0.0
-            
-            # Calculate optical flow
+                prev_crop = cv2.resize(prev_crop, (curr_crop.shape[1], curr_crop.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+            # Calculate optical flow between the previous and current crop
             flow = cv2.calcOpticalFlowFarneback(
                 prev_crop, curr_crop, None,
-                pyr_scale=0.5, levels=3, winsize=15, iterations=3,
-                poly_n=5, poly_sigma=1.2, flags=0
+                pyr_scale=0.5, levels=3, winsize=15,
+                iterations=3, poly_n=5, poly_sigma=1.2, flags=0
             )
-            
+
             # Calculate flow magnitude
             magnitude = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
             

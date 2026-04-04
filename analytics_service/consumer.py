@@ -72,11 +72,13 @@ class EquipmentEventConsumer:
             self.logger.warning(f"Topic availability check failed: {e}")
             return False
 
-    def connect_with_retry(self, max_attempts: int = 30, retry_delay: float = 2.0) -> bool:
+    def connect_with_retry(self, max_attempts: int = 0, retry_delay: float = 2.0) -> bool:
         """
         Connect to Kafka with retry logic.
         """
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0
+        while max_attempts <= 0 or attempt < max_attempts:
+            attempt += 1
             try:
                 if not self._wait_for_topic(timeout=5.0):
                     raise KafkaException(f"Kafka topic not available: {self.topic}")
@@ -91,12 +93,14 @@ class EquipmentEventConsumer:
                 self.logger.info(f"Connected to Kafka at {self.topic}")
                 return True
             except Exception as e:
-                self.logger.warning(f"Kafka connection attempt {attempt}/{max_attempts} failed: {e}")
-                if attempt < max_attempts:
-                    time.sleep(retry_delay)
+                if max_attempts > 0:
+                    self.logger.warning(f"Kafka connection attempt {attempt}/{max_attempts} failed: {e}")
                 else:
+                    self.logger.warning(f"Kafka connection attempt {attempt} failed: {e}")
+                if max_attempts > 0 and attempt >= max_attempts:
                     self.logger.error("Failed to connect to Kafka after all retries")
                     return False
+                time.sleep(retry_delay)
         return False
 
     def consume_messages(self, db_handler, shutdown_event) -> None:

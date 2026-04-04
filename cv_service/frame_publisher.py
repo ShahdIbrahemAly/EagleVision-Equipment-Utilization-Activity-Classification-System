@@ -84,7 +84,7 @@ class FramePublisher:
             success, buffer = cv2.imencode(
                 ".jpg", 
                 frame_bgr, 
-                [cv2.IMWRITE_JPEG_QUALITY, 70]
+                [cv2.IMWRITE_JPEG_QUALITY, 85]
             )
             
             if not success:

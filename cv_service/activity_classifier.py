@@ -55,16 +55,17 @@ class ActivityClassifier:
             if motion_source == "none":
                 candidate = WAITING
             else:
-                # Analyze flow vectors in upper zone for activity classification
-                h, w = flow_field_crop.shape[:2]
-                upper_zone = flow_field_crop[:h//2, :]
-                
-                # Calculate mean flow vectors
-                vy_mean = float(np.mean(upper_zone[..., 1])) if upper_zone.size > 0 else 0.0
-                vx_mean = float(np.mean(upper_zone[..., 0])) if upper_zone.size > 0 else 0.0
-                
-                abs_vx = abs(vx_mean)
-                abs_vy = abs(vy_mean)
+                # If we don't have real flow data, fall back to motion source only
+                if flow_field_crop is None or flow_field_crop.size == 0 or np.all(flow_field_crop == 0):
+                    candidate = DIGGING
+                else:
+                    # Analyze flow vectors in upper zone for activity classification
+                    h, w = flow_field_crop.shape[:2]
+                    upper_zone = flow_field_crop[:h//2, :]
+
+                    # Calculate mean flow vectors
+                    vy_mean = float(np.mean(upper_zone[..., 1])) if upper_zone.size > 0 else 0.0
+                    vx_mean = float(np.mean(upper_zone[..., 0])) if upper_zone.size > 0 else 0.0
                 
                 # Apply activity rules in order
                 if abs_vy > abs_vx * 1.5 and vy_mean > 0:
