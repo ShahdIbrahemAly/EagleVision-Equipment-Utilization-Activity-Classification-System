@@ -2,7 +2,7 @@
 Streamlit dashboard for EagleVision.
 Displays live video feed and equipment utilization statistics.
 """
-
+import cv2
 import os
 import sys
 import time
@@ -28,6 +28,13 @@ logging.basicConfig(
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+cached_frame_bytes: Optional[bytes] = None
+cached_frame_ts: Optional[str] = None
+
+# Application-level backend components
+db_manager: Optional['DatabaseManager'] = None
+redis_subscriber: Optional['RedisFrameSubscriber'] = None
 
 class DatabaseManager:
     """Database manager for TimescaleDB operations."""
@@ -248,32 +255,53 @@ def main():
     st.markdown("*Construction Equipment Utilization Monitoring*")
     
     # Initialize session state
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
-    
-    if 'redis_subscriber' not in st.session_state:
-        st.session_state.redis_subscriber = RedisFrameSubscriber()
-    
-    # Initialize database and Redis connections
-    initialize_connections()
+    global db_manager, redis_subscriber
+
+    if db_manager is None:
+        db_manager = DatabaseManager()
+
+    if redis_subscriber is None:
+        redis_subscriber = RedisFrameSubscriber()
+
+    if 'connections_initialized' not in st.session_state:
+        st.session_state.connections_initialized = False
+        st.session_state.db_connected = False
+        st.session_state.redis_connected = False
+
+    # Initialize database and Redis connections only once
+    if not st.session_state.connections_initialized:
+        db_ok, redis_ok = initialize_connections()
+        st.session_state.db_connected = db_ok
+        st.session_state.redis_connected = redis_ok
+        st.session_state.connections_initialized = True
     
     # Auto-refresh every second
     st_autorefresh(interval=1000, key="refresh")
     
     # Main layout: 2 columns
     col_video, col_stats = st.columns([2, 1])
+    last_updated = None
     
     with col_video:
         st.markdown("### 📹 Live Video Feed")
         
         # Try to get latest frame
-        frame_bytes = st.session_state.redis_subscriber.get_latest_frame()
-        frame_ts = st.session_state.redis_subscriber.get_latest_frame_timestamp()
-        
+        global cached_frame_bytes, cached_frame_ts
+        frame_bytes = redis_subscriber.get_latest_frame() if redis_subscriber else None
+        frame_ts = redis_subscriber.get_latest_frame_timestamp() if redis_subscriber else None
+
+        if frame_bytes is not None:
+            cached_frame_bytes = frame_bytes
+            cached_frame_ts = frame_ts
+        else:
+            frame_bytes = cached_frame_bytes
+            frame_ts = cached_frame_ts
+
+        image_placeholder = st.empty()
+        status_placeholder = st.empty()
+
         if frame_bytes:
             try:
-                image_placeholder = st.empty()
-
                 # Decode image from bytes
                 nparr = np.frombuffer(frame_bytes, np.uint8)
                 decoded_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -284,33 +312,37 @@ def main():
                 decoded_frame = cv2.cvtColor(decoded_frame, cv2.COLOR_BGR2RGB)
                 image_placeholder.image(decoded_frame, channels="RGB", use_column_width=True)
 
-                # Update last updated value in session state
-                st.session_state['last_updated_ts'] = frame_ts or time.strftime('%H:%M:%S')
+                last_updated = frame_ts if frame_ts else time.strftime('%Y-%m-%d %H:%M:%S')
+                status_placeholder.markdown(f"**Last frame:** {last_updated}")
 
             except Exception as e:
-                st.error(f"Error displaying frame: {e}")
-                st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=Corrupt+Frame", use_column_width=True)
+                image_placeholder.error(f"Error displaying frame: {e}")
+                status_placeholder.markdown("#### Corrupt frame data")
+                last_updated = None
         else:
-            # Show placeholder if no frame available
-            st.info("Waiting for video feed...")
-            st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=No+Video+Feed", use_column_width=True)
-            st.session_state['last_updated_ts'] = None
+            image_placeholder.info("Waiting for video feed...")
+            status_placeholder.markdown("#### No video feed available")
+            last_updated = None
+
+    # Store last_updated for sidebar (avoid modifying session state during render)
+    current_last_updated = last_updated
     
     with col_stats:
         st.markdown("### 📊 Equipment Status")
         
         # Get latest stats from database
-        stats = st.session_state.db_manager.get_latest_stats()
+        stats = db_manager.get_latest_stats() if db_manager else []
+        stats_placeholder = st.empty()
         
         if not stats:
-            st.info("Waiting for first detections...")
+            stats_placeholder.info("Waiting for first detections...")
         else:
             # Sort by equipment_id for consistent ordering
             stats.sort(key=lambda x: x.get('equipment_id', ''))
             
-            # Render equipment cards
-            for equipment_data in stats:
-                render_equipment_card(equipment_data)
+            with stats_placeholder.container():
+                for equipment_data in stats:
+                    render_equipment_card(equipment_data)
     
     # Sidebar with system info
     with st.sidebar:
@@ -347,28 +379,35 @@ def main():
         st.markdown("---")
         st.markdown("**Last Updated:**")
 
-        last_updated_ts = st.session_state.get('last_updated_ts')
-        if last_updated_ts:
+        if current_last_updated:
             # Use backend timestamp if available (unix seconds) or human readable
             try:
-                # if set by backend as float string
-                epoch = float(last_updated_ts)
+                epoch = float(current_last_updated)
                 human = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(epoch))
                 st.markdown(f"{human}")
             except Exception:
-                st.markdown(f"{last_updated_ts}")
+                st.markdown(f"{current_last_updated}")
         else:
             st.markdown("No frame yet")
 
-def initialize_connections():
+def initialize_connections() -> tuple[bool, bool]:
     """Initialize database and Redis connections."""
-    # Initialize database
-    if not st.session_state.db_manager.connect():
-        st.error("Failed to connect to database")
+    db_ok = False
+    redis_ok = False
+
+    # Initialize database only if not already connected
+    if not hasattr(st.session_state.db_manager, 'connection') or st.session_state.db_manager.connection is None:
+        db_ok = st.session_state.db_manager.connect()
+    else:
+        db_ok = True
     
-    # Initialize Redis
-    if not st.session_state.redis_subscriber.connect():
-        st.warning("Failed to connect to Redis - video feed unavailable")
+    # Initialize Redis only if not already connected
+    if not hasattr(st.session_state.redis_subscriber, 'redis_client') or st.session_state.redis_subscriber.redis_client is None:
+        redis_ok = st.session_state.redis_subscriber.connect()
+    else:
+        redis_ok = True
+
+    return db_ok, redis_ok
 
 # Initialize connections on first run
 if __name__ == "__main__":

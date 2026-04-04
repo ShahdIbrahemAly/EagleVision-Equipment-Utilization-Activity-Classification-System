@@ -9,6 +9,7 @@ import signal
 import sys
 from typing import Dict, Any
 from confluent_kafka import Producer, KafkaException, KafkaError
+from confluent_kafka.admin import AdminClient, NewTopic
 
 class EquipmentKafkaProducer:
     """Kafka producer for equipment utilization events."""
@@ -24,6 +25,7 @@ class EquipmentKafkaProducer:
         self.logger = logging.getLogger(__name__)
         self.topic = topic
         self.producer = None
+        self.admin_client = None
         
         # Producer configuration
         config = {
@@ -37,11 +39,33 @@ class EquipmentKafkaProducer:
         
         try:
             self.producer = Producer(config)
+            self.admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
+            self._ensure_topic_exists()
             self.logger.info(f"Kafka producer initialized for topic: {topic}")
         except Exception as e:
             self.logger.error(f"Failed to initialize Kafka producer: {e}")
             raise
     
+    def _ensure_topic_exists(self) -> None:
+        """
+        Ensure the target Kafka topic exists, creating it if necessary.
+        """
+        try:
+            existing_topics = self.admin_client.list_topics(timeout=10).topics
+            if self.topic in existing_topics:
+                self.logger.info(f"Kafka topic already exists: {self.topic}")
+                return
+
+            new_topic = NewTopic(self.topic, num_partitions=3, replication_factor=1)
+            fs = self.admin_client.create_topics([new_topic], request_timeout=15)
+            future = fs.get(self.topic)
+            if future is not None:
+                future.result()
+            self.logger.info(f"Created Kafka topic: {self.topic}")
+        except Exception as e:
+            self.logger.warning(f"Kafka topic creation check failed: {e}")
+            # Continue; topic may still exist or be created by broker auto-create
+
     def send(self, payload: Dict[str, Any]) -> bool:
         """
         Send a message to Kafka.

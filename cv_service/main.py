@@ -138,6 +138,8 @@ class CVService:
         self.frame_id = 0
         self.prev_frame = None
         self.actual_fps = self.target_fps
+        self.target_width = None
+        self.target_height = None
         
     def initialize(self) -> bool:
         """
@@ -177,7 +179,18 @@ class CVService:
             if self.actual_fps == 0:
                 self.actual_fps = self.target_fps
             
-            self.logger.info(f"Video opened: {self.video_source} (FPS: {self.actual_fps})")
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            self.logger.info(f"Video opened: {self.video_source} (FPS: {self.actual_fps}, Resolution: {width}x{height})")
+            
+            # Resize frames if they are too large to speed up processing
+            self.target_width = width
+            self.target_height = height
+            if width > 800 or height > 600:
+                self.logger.info(f"Downscaling video from {width}x{height} to 800x600 for faster processing")
+                self.target_width = 800
+                self.target_height = 600
             
             # Initialize detector
             self.detector = EquipmentDetector(
@@ -273,6 +286,10 @@ class CVService:
             frame: Input BGR frame
         """
         try:
+            # Resize frame if needed for faster processing
+            if hasattr(self, 'target_width') and (frame.shape[1] != self.target_width or frame.shape[0] != self.target_height):
+                frame = cv2.resize(frame, (self.target_width, self.target_height), interpolation=cv2.INTER_LINEAR)
+            
             # Convert to grayscale for motion analysis
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
