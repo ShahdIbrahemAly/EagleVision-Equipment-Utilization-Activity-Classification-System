@@ -1,14 +1,8 @@
 """
 Streamlit dashboard for EagleVision.
-Displays live video feed and equipment utilization statistics.
 """
-
-import os
-import sys
-import time
-import logging
+import cv2, os, time, logging
 from typing import Dict, List, Optional
-import io
 import numpy as np
 from dotenv import load_dotenv
 import streamlit as st
@@ -19,313 +13,296 @@ import psycopg2
 from psycopg2 import sql, OperationalError
 from psycopg2.extras import DictCursor
 
-# Load environment variables
 load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG if os.getenv('DEBUG', '0') == '1' else logging.INFO,
-    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
+
 class DatabaseManager:
-    """Database manager for TimescaleDB operations."""
-    
     def __init__(self):
-        """Initialize database manager."""
-        self.host = os.getenv('POSTGRES_HOST', 'timescaledb')
-        self.port = int(os.getenv('POSTGRES_PORT', '5432'))
+        self.host     = os.getenv('POSTGRES_HOST', 'timescaledb')
+        self.port     = int(os.getenv('POSTGRES_PORT', '5432'))
         self.database = os.getenv('POSTGRES_DB', 'eaglevision')
-        self.user = os.getenv('POSTGRES_USER', 'ev_user')
+        self.user     = os.getenv('POSTGRES_USER', 'ev_user')
         self.password = os.getenv('POSTGRES_PASSWORD', 'ev_pass')
+        self.recent_seconds = int(os.getenv('DASHBOARD_RECENT_SECONDS', '10'))
         self.connection = None
-    
+
     def connect(self) -> bool:
-        """
-        Connect to database.
-        
-        Returns:
-            True if connection successful, False otherwise
-        """
         try:
             self.connection = psycopg2.connect(
-                host=self.host,
-                port=self.port,
-                database=self.database,
-                user=self.user,
-                password=self.password,
-                cursor_factory=DictCursor
-            )
+                host=self.host, port=self.port, database=self.database,
+                user=self.user, password=self.password, cursor_factory=DictCursor)
             return True
         except OperationalError as e:
-            logger.error(f"Database connection failed: {e}")
+            logger.error(f"DB connect failed: {e}")
             return False
-    
+
     def get_latest_stats(self) -> List[Dict]:
-        """
-        Get latest statistics for all equipment.
-        
-        Returns:
-            List of dictionaries with latest stats per equipment
-        """
+        # reconnect if dropped
+        if not self.connection or self.connection.closed:
+            self.connect()
         if not self.connection:
             return []
-        
         try:
-            query = sql.SQL("""
-                SELECT DISTINCT ON (equipment_id)
-                    equipment_id, equipment_class, current_state, current_activity,
-                    motion_source, util_percent, active_seconds, idle_seconds, time
-                FROM equipment_events
-                ORDER BY equipment_id, time DESC;
-            """)
-            
-            with self.connection.cursor() as cursor:
-                cursor.execute(query)
-                results = cursor.fetchall()
-            
-            return [dict(row) for row in results]
-        
+            with self.connection.cursor() as cur:
+                if self.recent_seconds > 0:
+                    cur.execute("""
+                        SELECT DISTINCT ON (equipment_id)
+                            equipment_id, equipment_class, current_state,
+                            current_activity, motion_source, util_percent,
+                            active_seconds, idle_seconds, time
+                        FROM equipment_events
+                        WHERE time >= NOW() - interval %s
+                        ORDER BY equipment_id, time DESC;
+                    """, (f'{self.recent_seconds} seconds',))
+                else:
+                    cur.execute("""
+                        SELECT DISTINCT ON (equipment_id)
+                            equipment_id, equipment_class, current_state,
+                            current_activity, motion_source, util_percent,
+                            active_seconds, idle_seconds, time
+                        FROM equipment_events
+                        ORDER BY equipment_id, time DESC;
+                    """)
+
+                stats = [dict(r) for r in cur.fetchall()]
+
+            return stats
         except Exception as e:
-            logger.error(f"Failed to get latest stats: {e}")
+            logger.error(f"get_latest_stats failed: {e}")
+            try: self.connection.rollback()
+            except: pass
             return []
-    
-    def close(self) -> None:
-        """Close database connection."""
+
+    def close(self):
         if self.connection:
-            try:
-                self.connection.close()
-            except Exception as e:
-                logger.error(f"Error closing database connection: {e}")
-            finally:
-                self.connection = None
+            try: self.connection.close()
+            except: pass
+            self.connection = None
 
-class RedisFrameSubscriber:
-    """Redis subscriber for video frames."""
-    
+
+class RedisClient:
     def __init__(self):
-        """Initialize Redis subscriber."""
-        self.redis_host = os.getenv('REDIS_HOST', 'redis')
-        self.redis_port = int(os.getenv('REDIS_PORT', '6379'))
-        self.channel = os.getenv('REDIS_FRAME_CHANNEL', 'frames')
-        self.redis_client = None
-        self.pubsub = None
-    
-    def connect(self) -> bool:
-        """
-        Connect to Redis.
-        
-        Returns:
-            True if connection successful, False otherwise
-        """
-        try:
-            self.redis_client = redis.Redis(
-                host=self.redis_host,
-                port=self.redis_port,
-                decode_responses=False,
-                socket_connect_timeout=5,
-                socket_timeout=5
-            )
-            
-            # Test connection
-            self.redis_client.ping()
-            
-            # Set up pubsub
-            self.pubsub = self.redis_client.pubsub()
-            self.pubsub.subscribe(self.channel)
-            
-            return True
-        
-        except (ConnectionError, RedisError) as e:
-            logger.error(f"Redis connection failed: {e}")
-            return False
-    
-    def get_latest_frame(self) -> Optional[bytes]:
-        """
-        Get the latest frame from Redis.
-        
-        Returns:
-            Frame bytes or None if no frame available
-        """
-        if not self.redis_client:
-            return None
-        
-        try:
-            # Look for where you get data from Redis and use this:
-            frame_data = self.redis_client.get('latest_frame')
-            
-            if frame_data is not None:
-                return frame_data
-            else:
-                return None
-        
-        except Exception as e:
-            logger.error(f"Error getting frame from Redis: {e}")
-            return None
-    
-    def close(self) -> None:
-        """Close Redis connection."""
-        if self.pubsub:
-            try:
-                self.pubsub.close()
-            except Exception as e:
-                logger.error(f"Error closing Redis pubsub: {e}")
-        
-        if self.redis_client:
-            try:
-                self.redis_client.close()
-            except Exception as e:
-                logger.error(f"Error closing Redis connection: {e}")
+        self.host    = os.getenv('REDIS_HOST', 'redis')
+        self.port    = int(os.getenv('REDIS_PORT', '6379'))
+        self.client  = None
 
-def render_equipment_card(equipment_data: Dict) -> None:
-    """
-    Render equipment status card.
-    
-    Args:
-        equipment_data: Equipment statistics dictionary
-    """
-    equipment_id = equipment_data.get('equipment_id', 'Unknown')
-    equipment_class = equipment_data.get('equipment_class', 'Unknown')
-    current_state = equipment_data.get('current_state', 'INACTIVE')
-    current_activity = equipment_data.get('current_activity', 'WAITING')
-    motion_source = equipment_data.get('motion_source', 'none')
-    util_percent = equipment_data.get('util_percent', 0.0)
-    active_seconds = equipment_data.get('active_seconds', 0.0)
-    idle_seconds = equipment_data.get('idle_seconds', 0.0)
-    
-    # Equipment header
-    st.markdown(f"### {equipment_id} — {equipment_class}")
-    
-    # State badge
-    if current_state == "ACTIVE":
-        st.markdown("🟢 **ACTIVE**")
-    else:
-        st.markdown("🔴 **INACTIVE**")
-    
-    # Metrics
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Utilization", f"{util_percent:.1f}%")
-        st.metric("Active time", f"{active_seconds:.0f}s")
-    with col2:
-        st.metric("Idle time", f"{idle_seconds:.0f}s")
-    
-    # Activity and motion info
-    st.caption(f"Activity: {current_activity} | Motion: {motion_source}")
-    
+    def connect(self) -> bool:
+        try:
+            self.client = redis.Redis(host=self.host, port=self.port,
+                                      decode_responses=False,
+                                      socket_connect_timeout=5,
+                                      socket_timeout=5)
+            self.client.ping()
+            return True
+        except Exception as e:
+            logger.error(f"Redis connect failed: {e}")
+            return False
+
+    def get_frame(self) -> Optional[bytes]:
+        if not self.client:
+            if not self.connect():
+                return None
+        try:
+            return self.client.get('latest_frame')
+        except Exception:
+            self.client = None
+            self.connect()
+            return None
+
+    def get_ts(self) -> Optional[str]:
+        if not self.client:
+            if not self.connect():
+                return None
+        try:
+            v = self.client.get('latest_frame_ts')
+            return v.decode() if v else None
+        except Exception:
+            self.client = None
+            self.connect()
+            return None
+
+
+# ── session-state helpers ─────────────────────────────────────────────────────
+
+def _init_session_state() -> None:
+    if 'db' not in st.session_state:
+        st.session_state.db = DatabaseManager()
+        st.session_state.db_ok = st.session_state.db.connect()
+    if 'redis' not in st.session_state:
+        st.session_state.redis = RedisClient()
+        st.session_state.redis_ok = st.session_state.redis.connect()
+    if 'cached_frame_bytes' not in st.session_state:
+        st.session_state.cached_frame_bytes = None
+        st.session_state.cached_frame_ts = None
+
+
+def _get_db() -> DatabaseManager:
+    return st.session_state.db
+
+
+def _get_redis() -> RedisClient:
+    return st.session_state.redis
+
+
+def _get_cached_frame() -> Optional[bytes]:
+    return st.session_state.get('cached_frame_bytes')
+
+
+def _set_cached_frame(data: bytes):
+    st.session_state.cached_frame_bytes = data
+    st.session_state.cached_frame_ts = time.time()
+
+
+# ── UI helpers ────────────────────────────────────────────────────────────────
+def render_equipment_card(eq: Dict):
+    state    = eq.get('current_state', 'INACTIVE')
+    sid      = eq.get('equipment_id',  'Unknown')
+    cls      = eq.get('equipment_class', 'Unknown')
+    activity = eq.get('current_activity', 'WAITING')
+    motion   = eq.get('motion_source', 'none')
+    util     = eq.get('util_percent', 0.0)
+    active_s = eq.get('active_seconds', 0.0)
+    idle_s   = eq.get('idle_seconds', 0.0)
+
+    st.markdown(f"### {sid} — {cls}")
+    st.markdown("🟢 **ACTIVE**" if state == "ACTIVE" else "🔴 **INACTIVE**")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Utilization", f"{util:.1f}%")
+        st.metric("Active time", f"{active_s:.0f}s")
+    with c2:
+        st.metric("Idle time", f"{idle_s:.0f}s")
+    st.caption(f"Activity: {activity} | Motion: {motion}")
     st.divider()
 
+
+# ── main ──────────────────────────────────────────────────────────────────────
 def main():
-    """Main Streamlit application."""
-    # Page configuration
-    st.set_page_config(
-        page_title="EagleVision",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Title
+    st.set_page_config(page_title="EagleVision", layout="wide",
+                       initial_sidebar_state="expanded")
     st.title("🦅 EagleVision")
     st.markdown("*Construction Equipment Utilization Monitoring*")
-    
-    # Initialize session state
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
-    
-    if 'redis_subscriber' not in st.session_state:
-        st.session_state.redis_subscriber = RedisFrameSubscriber()
-    
-    # Initialize database and Redis connections
-    initialize_connections()
-    
-    # Auto-refresh every second
-    st_autorefresh(interval=1000, key="refresh")
-    
-    # Main layout: 2 columns
+
+    _init_session_state()
+    db    = _get_db()
+    rcli  = _get_redis()
+
+    # Refresh controls
+    st.session_state.setdefault('auto_refresh', True)
+    st.session_state.setdefault('refresh_interval', 5)
+    auto_refresh = st.session_state.auto_refresh
+    selected_interval = st.session_state.refresh_interval
+
+    refresh_ms = int(os.getenv('DASHBOARD_REFRESH_MS', '5000'))
+    if auto_refresh:
+        st_autorefresh(interval=selected_interval * 1000, key="ar")
+    st.caption(f"Auto-refresh: {'ON' if auto_refresh else 'OFF'} ({selected_interval}s), equipment in last {db.recent_seconds}s.")
+
     col_video, col_stats = st.columns([2, 1])
-    
+
+    # ── video feed ────────────────────────────────────────────────────────────
     with col_video:
         st.markdown("### 📹 Live Video Feed")
-        
-        # Try to get latest frame
-        frame_bytes = st.session_state.redis_subscriber.get_latest_frame()
-        
-        if frame_bytes:
+        img_ph  = st.empty()
+        stat_ph = st.empty()
+
+        frame_bytes = _get_cached_frame()    # always use cache → no blank flash
+        new_bytes = rcli.get_frame()
+        decoded = None
+
+        if new_bytes is not None and new_bytes != frame_bytes:
             try:
-                # Convert bytes to image for display
-                image_placeholder = st.empty()
-                image_placeholder.image(frame_bytes, channels="BGR", use_column_width=True)
+                arr = np.frombuffer(new_bytes, np.uint8)
+                tmp = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if tmp is None:
+                    raise ValueError("decode returned None")
+                decoded = cv2.cvtColor(tmp, cv2.COLOR_BGR2RGB)
+                _set_cached_frame(new_bytes)
+                frame_bytes = new_bytes
             except Exception as e:
-                st.error(f"Error displaying frame: {e}")
+                logger.warning(f"Invalid new frame received, keeping cached frame: {e}")
+
+        if decoded is None and frame_bytes:
+            try:
+                arr = np.frombuffer(frame_bytes, np.uint8)
+                tmp = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if tmp is None:
+                    raise ValueError("decode returned None")
+                decoded = cv2.cvtColor(tmp, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                logger.warning(f"Cached frame decode failed: {e}")
+                decoded = None
+
+        if decoded is not None:
+            try:
+                try:
+                    img_ph.image(decoded, channels="RGB", use_container_width=True)
+                except TypeError:
+                    img_ph.image(decoded, channels="RGB")
+
+                ts = rcli.get_ts()
+                try:
+                    ts_str = time.strftime('%H:%M:%S', time.localtime(float(ts)))
+                except Exception:
+                    ts_str = ts or "—"
+                stat_ph.markdown(f"**Last frame:** {ts_str}")
+            except Exception as e:
+                img_ph.error(f"Frame draw failed: {e}")
         else:
-            # Show placeholder if no frame available
-            st.info("Waiting for video feed...")
-            st.image("https://via.placeholder.com/640x480/000000/FFFFFF?text=No+Video+Feed", 
-                    use_column_width=True)
-    
+            cached_len = len(frame_bytes) if frame_bytes else 0
+            conn_status = "connected" if st.session_state.get('redis_ok', False) else "disconnected"
+            img_ph.info(f"⏳ Waiting for video feed… (cached={cached_len}, redis={conn_status})")
+
+    # ── equipment status ──────────────────────────────────────────────────────
     with col_stats:
         st.markdown("### 📊 Equipment Status")
-        
-        # Get latest stats from database
-        stats = st.session_state.db_manager.get_latest_stats()
-        
+        stats = db.get_latest_stats()
+        stats.sort(key=lambda x: x.get('equipment_id', ''))
+        sp = st.empty()
         if not stats:
-            st.info("Waiting for first detections...")
+            sp.info("⏳ Waiting for first detections…")
         else:
-            # Sort by equipment_id for consistent ordering
-            stats.sort(key=lambda x: x.get('equipment_id', ''))
-            
-            # Render equipment cards
-            for equipment_data in stats:
-                render_equipment_card(equipment_data)
-    
-    # Sidebar with system info
+            with sp.container():
+                for eq in stats:
+                    render_equipment_card(eq)
+
+    # ── sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
+        st.markdown("### 🔄 Refresh Controls")
+        auto_refresh = st.toggle("Auto-refresh", value=st.session_state.get('auto_refresh', True), key="toggle_ar")
+        selected_interval = st.slider("Refresh interval (s)", 1, 30, st.session_state.get('refresh_interval', 5), key="slider_interval")
+        if st.button("🔄 Manual Refresh", key="manual_refresh"):
+            st.rerun()
+        st.session_state.auto_refresh = auto_refresh
+        st.session_state.refresh_interval = selected_interval
+        
+        st.markdown("---")
         st.markdown("### 📋 System Information")
-        
-        # Connection status
-        db_connected = st.session_state.db_manager.connection is not None
-        redis_connected = st.session_state.redis_subscriber.redis_client is not None
-        
+        db_ok    = st.session_state.get('db_ok', False)
+        redis_ok = st.session_state.get('redis_ok', False)
         st.markdown("**Connections:**")
-        if db_connected:
-            st.markdown("✅ Database")
-        else:
-            st.markdown("❌ Database")
-        
-        if redis_connected:
-            st.markdown("✅ Redis")
-        else:
-            st.markdown("❌ Redis")
-        
+        st.markdown("✅ Database" if db_ok    else "❌ Database")
+        st.markdown("✅ Redis"    if redis_ok else "❌ Redis")
         st.markdown("---")
-        
-        # Statistics
+
         if stats:
-            total_equipment = len(stats)
-            active_equipment = sum(1 for s in stats if s.get('current_state') == 'ACTIVE')
-            avg_utilization = sum(s.get('util_percent', 0) for s in stats) / total_equipment
-            
+            total  = len(stats)
+            active = sum(1 for s in stats if s.get('current_state') == 'ACTIVE')
+            avg_u  = sum(s.get('util_percent', 0) for s in stats) / total
             st.markdown("**Summary:**")
-            st.metric("Total Equipment", total_equipment)
-            st.metric("Active Equipment", active_equipment)
-            st.metric("Avg Utilization", f"{avg_utilization:.1f}%")
-        
+            st.metric("Total Equipment",  total)
+            st.metric("Active Equipment", active)
+            st.metric("Avg Utilization",  f"{avg_u:.1f}%")
+
         st.markdown("---")
-        st.markdown("**Last Updated:**")
-        st.markdown(f"{time.strftime('%H:%M:%S')}")
+        cached_ts = st.session_state.get('cached_frame_ts')
+        if cached_ts:
+            st.markdown("**Last Updated:**")
+            st.markdown(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cached_ts)))
 
-def initialize_connections():
-    """Initialize database and Redis connections."""
-    # Initialize database
-    if not st.session_state.db_manager.connect():
-        st.error("Failed to connect to database")
-    
-    # Initialize Redis
-    if not st.session_state.redis_subscriber.connect():
-        st.warning("Failed to connect to Redis - video feed unavailable")
 
-# Initialize connections on first run
 if __name__ == "__main__":
     main()

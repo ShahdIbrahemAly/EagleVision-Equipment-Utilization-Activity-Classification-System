@@ -84,7 +84,7 @@ class FramePublisher:
             success, buffer = cv2.imencode(
                 ".jpg", 
                 frame_bgr, 
-                [cv2.IMWRITE_JPEG_QUALITY, 70]
+                [cv2.IMWRITE_JPEG_QUALITY, 85]
             )
             
             if not success:
@@ -101,8 +101,12 @@ class FramePublisher:
             else:
                 self.logger.debug("No subscribers for frame channel")
             
-            # 2. ADD THIS LINE (The Fix): Save the latest frame to a fixed key
+            # 2. Save the latest frame to a fixed key for dashboard polling
             self.r.set('latest_frame', frame_bytes)
+
+            # 3. Save a timestamp for the latest frame
+            now_ts = time.time()
+            self.r.set('latest_frame_ts', f"{now_ts:.3f}")
             
             return True
             

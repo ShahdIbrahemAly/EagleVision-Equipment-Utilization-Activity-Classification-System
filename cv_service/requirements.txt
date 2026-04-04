@@ -4,3 +4,4 @@ confluent-kafka==2.3.0
 redis==5.0.1
 numpy==1.26.4
 python-dotenv==1.0.1
+lapx>=0.5.2
