@@ -54,7 +54,7 @@ Real-time microservices pipeline for construction site equipment tracking and ut
 ## Demo Screenshots
 
 **Figure 1 — Live dashboard: EXC-001 actively digging with `arm_only` motion detection**
-![Dashboard - Excavator Digging](demo/Screenshot1.png)
+![Dashboard - Excavator Digging](demo/screenshot1.jpg)
 
 **Figure 2 — Equipment cards: per-machine working time, idle time, and utilization %**
 ![Dashboard - Equipment Status](demo/screenshot2.png)
