@@ -1,0 +1,9 @@
+ultralytics==8.2.0
+torch==2.5.1
+torchvision==0.20.1
+opencv-python-headless==4.9.0.80
+confluent-kafka==2.3.0
+redis==5.0.1
+numpy==1.26.4
+python-dotenv==1.0.1
+lapx>=0.5.2

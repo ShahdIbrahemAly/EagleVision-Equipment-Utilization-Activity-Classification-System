@@ -1,0 +1,39 @@
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Video files
+cv_service/data/*input.avi
+cv_service/data/*.avi
+cv_service/data/*.mov
+cv_service/data/*.mkv
+
+# Docker volumes
+tsdb_data/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
